@@ -66,7 +66,7 @@ Class Addtogroupbydni extends Module {
 
         // Aquí introduciremos nuestro código para darle funcionalidad al botón "Exportar Clientes en CSV" 
         if ( Tools::isSubmit('export_to_csv') ) {
-        
+
             // Obtenemos el grupo seleccionado en el Backend
             $selected_group = ((int)Configuration::get('SOY_'.strtoupper($this->name).'_SELECTED_GROUP'));
 
@@ -157,6 +157,8 @@ Class Addtogroupbydni extends Module {
                     $this->_html .= $this->displayError($this->trans('Los registros del CSV insertado no son correctos. Recuerda utilizar la "," como delimitador.'));
                     return $this->_html . $this->renderForm();
                 }
+                // Crea un archivo log con la información del fichero csv subido
+                $this->createCSVUploadedLog($file, $registros_csv);
                 $this->insertVipMembersOnDB($registros_csv);
                 $this->_html .= $this->displayConfirmation($this->trans('CSV file uploaded successfully.'));
             } 
@@ -272,6 +274,41 @@ Class Addtogroupbydni extends Module {
             ));
         }
     }
+
+    /**
+     * Crea un fichero log en la carpeta /logs con los datos cargados del csv
+     *
+     * @param [array[]] $file_uploaded
+     * @param [array[]] $file_data_array
+     */
+    public function createCSVUploadedLog($file_uploaded, $file_data_array) {
+        // Obtiene la fecha actual
+        $date = new DateTime();
+        
+        // Cadena con información del Admin: fecha, ip, email y nombre
+        $log_data = $date->format('d/m/Y H:i:s').
+            "\n\n".'[ADMIN]:'.
+            "\n".'IP: '.$_SERVER['REMOTE_ADDR'].
+            "\n".'Account: '.$this->context->employee->email.
+            "\n".'Name: '.$this->context->employee->firstname.' '.$this->context->employee->lastname;    
+        
+        // Añade información del fichero csv: nombre, nombre temporal, tipo y tamaño (bytes)
+        $log_data .= "\n\n".'[CSV FILE]:'.
+            "\n".'Filename: '.$file_uploaded["name"].
+            "\n".'Temp Name: '.$file_uploaded["tmp_name"].
+            "\n".'Type: '.$file_uploaded["type"].
+            "\n".'Size: '.$file_uploaded["size"].' bytes.';
+        
+        // Añade los datos del fichero csv:
+        $log_data .= "\n\n".'[CSV DATA]:'."\n";
+        $log_data .= implode(",", $file_data_array);
+
+        // Guarda el fichero en /logs con el nombre: addtogroupbydni_csv_uploaded_YYY_MM_DD_HHMMSS.log
+        $path_file = '..'._MODULE_DIR_.$this->name.'/logs/'.$this->name.'_csv_uploaded_'.$date->format('Y_m_d_His').'.log';   // Ruta relativa: "../modules/addtogroupbydni/logs/addtogroupbydni_csv_uploaded_2021_02_24_105002.log"
+        //$path_file = _PS_MODULE_DIR_.$this->name.'/logs/'.$this->name.'_csv_uploaded_'.$date->format('Y_m_d_His').'.log';   // Ruta absoluta: "/home/admin/web/gonzalvez7422.tk/public_html/modules/addtogroupbydni/logs/addtogroupbydni_csv_uploaded_2021_02_24_105002.log"
+        file_put_contents($path_file, $log_data);
+    }
+
 
     /**
      * Insertamos en la BBDD los clientes obtenidos mediante un archivo csv
