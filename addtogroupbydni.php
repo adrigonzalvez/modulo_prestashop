@@ -67,6 +67,64 @@ Class Addtogroupbydni extends Module {
         // Aquí introduciremos nuestro código para darle funcionalidad al botón "Exportar Clientes en CSV" 
         if ( Tools::isSubmit('export_to_csv') ) {
         
+            // Obtenemos el grupo seleccionado en el Backend
+            $selected_group = ((int)Configuration::get('SOY_'.strtoupper($this->name).'_SELECTED_GROUP'));
+
+            // Obtiene el id cliente, el id grupo, el nombre traducido del grupo, el correo, el nombre y el apellido del grupo de cliente seleccionado:
+            /*
+                SELECT c.id_customer, cg.id_group, gl.name, email, firstname, lastname
+                FROM ps_customer AS c
+                INNER JOIN ps_customer_group AS cg ON c.id_customer = cg.id_customer
+                INNER JOIN ps_group_lang AS gl ON cg.id_group = gl.id_group
+                WHERE cg.id_group = 3 AND gl.id_lang = 1
+            */
+            $query = "SELECT c.id_customer, cg.id_group, gl.name, email, firstname, lastname ".
+            "FROM "._DB_PREFIX_."customer AS c ".
+            "INNER JOIN "._DB_PREFIX_."customer_group AS cg ON c.id_customer = cg.id_customer ".
+            "INNER JOIN "._DB_PREFIX_."group_lang AS gl ON cg.id_group = gl.id_group ".
+            "WHERE cg.id_group = ". $selected_group ." AND gl.id_lang = ". $this->context->language->id;
+            $customers_db = Db::getInstance()->executeS($query);
+
+            // Obtiene el nombre del grupo de clientes seleccionado:
+            $query = "SELECT name FROM "._DB_PREFIX_."group_lang WHERE id_group = ".$selected_group. " AND id_lang = ". $this->context->language->id;
+            // Crea el nombre del fichero a partir del nombre del grupo seleccionado, en minúsculas y reemplaza espacios (" ") por guiones ("_"):
+            $file_name = str_replace(' ', '_', strtolower(Db::getInstance()->getValue($query)));
+
+            // Ruta + Nombre del fichero csv a crear:
+            $path_file = '..'._MODULE_DIR_.$this->name.'/logs/'.$file_name.'.csv';   // Ruta relativa: "../modules/addtogroupbydni/logs/cliente_vip.csv"
+            //$path_file = _PS_MODULE_DIR_.$this->name.'/logs/'.$file_name.'.csv';      // Ruta absoluta: "/home/admin/web/gonzalvez7422.tk/public_html/modules/addtogroupbydni/logs/cliente_vip.csv"
+
+            // Crea el fichero csv y si tiene éxito:
+            if (($file = fopen($path_file, 'w')) !== FALSE) {             
+                // Escribe la secuencia de caracteres BOM para arreglar el problema con UTF-8 en Excel
+                fputs($file, $bom = chr(0xEF) . chr(0xBB) . chr(0xBF) );
+                // Escribe cada fila en el fichero csv, separado por coma ",":
+                foreach ($customers_db as $customer) {
+                    fputcsv($file, $customer, ',');
+                }
+                // Cierra el fichero
+                fclose($file);
+
+                // Descarga el fichero csv:
+                if (file_exists($path_file)) {
+                    header('Content-Description: File Transfer');
+                    header('Content-Type: application/octet-stream');
+                    header('Content-Disposition: attachment; filename="'.basename($path_file).'"');
+                    header('Expires: 0');
+                    header('Cache-Control: must-revalidate');
+                    header('Pragma: public');
+                    header('Content-Length: ' . filesize($path_file));
+
+                    readfile($path_file);
+                    exit;   
+                }  
+
+            //  Si no puede abrir/crear el fichero CSV:
+            } else {
+                $this->_html .= $this->displayError($this->trans('Ha ocurrido un error al crear el fichero CSV.'));
+                return $this->_html . $this->renderForm() . $this->display(__FILE__, 'views/templates/admin/addtogroupbydni.tpl'); 
+            }
+
         }
 
         // Submit del grupo VIP seleccionado
