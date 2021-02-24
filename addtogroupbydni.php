@@ -91,8 +91,8 @@ Class Addtogroupbydni extends Module {
             $file_name = str_replace(' ', '_', strtolower(Db::getInstance()->getValue($query)));
 
             // Ruta + Nombre del fichero csv a crear:
-            $path_file = '..'._MODULE_DIR_.$this->name.'/logs/'.$file_name.'.csv';   // Ruta relativa: "../modules/addtogroupbydni/logs/cliente_vip.csv"
-            //$path_file = _PS_MODULE_DIR_.$this->name.'/logs/'.$file_name.'.csv';      // Ruta absoluta: "/home/admin/web/gonzalvez7422.tk/public_html/modules/addtogroupbydni/logs/cliente_vip.csv"
+            $path_file = '..'._MODULE_DIR_.$this->name.'/'.$file_name.'.csv';   // Ruta relativa: "../modules/addtogroupbydni/cliente_vip.csv"
+            //$path_file = _PS_MODULE_DIR_.$this->name.'/'.$file_name.'.csv';      // Ruta absoluta: "/home/admin/web/gonzalvez7422.tk/public_html/modules/addtogroupbydni/cliente_vip.csv"
 
             // Crea el fichero csv y si tiene éxito:
             if (($file = fopen($path_file, 'w')) !== FALSE) {             
