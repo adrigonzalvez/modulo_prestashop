@@ -12,7 +12,7 @@ Class Addtogroupbydni extends Module {
         $this->version = '1.0.0';
         $this->author = 'Daniel Soto';
         $this->displayName = $this->trans('Add to group by DNI');
-        $this->description = $this->trans('Permite subir un CSV con los DNIs de clientes a los cuales queremos agregar a un grupo de clientes de PrestaShop');
+        $this->description = $this->trans('Permite subir un CSV con los DNIs Y EMAILs de clientes a los cuales queremos agregar a un grupo de clientes de PrestaShop');
         $this->controllers = array('default');
         $this->bootstrap = 1; 
 
@@ -25,6 +25,8 @@ Class Addtogroupbydni extends Module {
 
         if (!parent::install()
                 OR !$this->installDb()
+                OR !$this->registerHook('actionCustomerAccountAdd')
+                OR !$this->registerHook('actionCustomerAccountUpdate')
                 OR !$this->registerHook('actionValidateCustomerAddressForm')
                 OR !$this->registerHook('actionObjectDeleteBefore')
             )
@@ -32,14 +34,15 @@ Class Addtogroupbydni extends Module {
         return true;
     }
 
-    // Creamos tabla en DB para almacenar los socios VIP y el equipo al que corresponden
+    // Creamos tabla en DB para almacenar los socios VIP y el grupo al que corresponden
     public function installDb() {
-
+        // Añado la columna tipo = 1=>dni, 2=>email
         if (Db::getInstance()->execute('
             CREATE TABLE IF NOT EXISTS `'._DB_PREFIX_. $this->name. '_vip_miembros` (
-            `dni` VARCHAR(9) NOT NULL,
-            `equipo` INT(11) UNSIGNED NOT NULL,
-            PRIMARY KEY ( `dni`, `equipo` )
+            `dni` VARCHAR(50) NOT NULL,
+            `grupo` INT(11) UNSIGNED NOT NULL,
+            `tipo` INT UNSIGNED NOT NULL,
+            PRIMARY KEY ( `dni`, `grupo` )
             ) ENGINE = ' . _MYSQL_ENGINE_ . ' CHARACTER SET utf8 COLLATE utf8_general_ci;')){
                 return true;
         }
@@ -51,6 +54,8 @@ Class Addtogroupbydni extends Module {
     public function uninstall() {
 
         if (!parent::uninstall() 
+                OR !$this->unregisterHook('actionCustomerAccountAdd')
+                OR !$this->unregisterHook('actionCustomerAccountUpdate')
                 OR !$this->unregisterHook('actionValidateCustomerAddressForm')
                 OR !$this->unregisterHook('actionObjectDeleteBefore')
             )
@@ -68,7 +73,7 @@ Class Addtogroupbydni extends Module {
         if ( Tools::isSubmit('export_to_csv') ) {
 
             // Obtenemos el grupo seleccionado en el Backend
-            $selected_group = ((int)Configuration::get('SOY_'.strtoupper($this->name).'_SELECTED_GROUP'));
+            $selected_group = (int)(Tools::getValue('groups_name'));
 
             // Obtiene el id cliente, el id grupo, el nombre traducido del grupo, el correo, el nombre y el apellido del grupo de cliente seleccionado:
             /*
@@ -152,13 +157,15 @@ Class Addtogroupbydni extends Module {
                 $file = $value;
 
             if ($file['error'] === UPLOAD_ERR_OK){
-                $registros_csv = $this->getDniArrayFromCsv($file['tmp_name'], ',');    
+                // Obtenemos un array con los dni y los emails validados
+                $registros_csv = $this->csvToArrayValidated($file['tmp_name'], ','); 
                 if ( $registros_csv == FALSE ){
                     $this->_html .= $this->displayError($this->trans('Los registros del CSV insertado no son correctos. Recuerda utilizar la "," como delimitador.'));
                     return $this->_html . $this->renderForm();
                 }
-                // Crea un archivo log con la información del fichero csv subido
+                // Crea un archivo log con la información del fichero csv subido correctamente y validado
                 $this->createCSVUploadedLog($file, $registros_csv);
+                // Inserta el cliente en la base de datos
                 $this->insertVipMembersOnDB($registros_csv);
                 $this->_html .= $this->displayConfirmation($this->trans('CSV file uploaded successfully.'));
             } 
@@ -262,18 +269,25 @@ Class Addtogroupbydni extends Module {
     public function insertCustomerByGroup($group) {
 
         $id_customer = (int)$this->context->customer->id;
+        dump($id_customer);
 
         $query = "SELECT id_group FROM "._DB_PREFIX_."customer_group WHERE id_group=". (int)$group ." AND id_customer=". (int)$id_customer;
         $results = Db::getInstance()->getValue($query);
         
+        dump("Results:");
+        dump($results);
+        dump("Group:");
+        dump($group);
+        
         // Insertamos el cliente en la BBDD
-        if ( !$group == $results ) {
+        if ( $group != $results ) {
             Db::getInstance()->insert('customer_group', array(
                 'id_customer' => (int)$id_customer,
                 'id_group' => $group,
             ));
         }
     }
+
 
     /**
      * Crea un fichero log en la carpeta /logs con los datos cargados del csv
@@ -284,6 +298,10 @@ Class Addtogroupbydni extends Module {
     public function createCSVUploadedLog($file_uploaded, $file_data_array) {
         // Obtiene la fecha actual
         $date = new DateTime();
+        // Obtiene el nombre del grupo de clientes seleccionado:
+        $group_id = (int)(Tools::getValue('groups_name'));
+        $query = "SELECT name FROM "._DB_PREFIX_."group_lang WHERE id_group = ".$group_id." AND id_lang = ". $this->context->language->id;
+        $gruop_name = Db::getInstance()->getValue($query);
         
         // Cadena con información del Admin: fecha, ip, email y nombre
         $log_data = $date->format('d/m/Y H:i:s').
@@ -292,13 +310,18 @@ Class Addtogroupbydni extends Module {
             "\n".'Account: '.$this->context->employee->email.
             "\n".'Name: '.$this->context->employee->firstname.' '.$this->context->employee->lastname;    
         
+        // Añade el Grupo de Clientes del csv subido
+        $log_data .= "\n\n".'[CUSTOMER GROUP]:'.
+            "\n".'ID Group: '.$group_id.
+            "\n".'Group: '.$gruop_name;
+
         // Añade información del fichero csv: nombre, nombre temporal, tipo y tamaño (bytes)
         $log_data .= "\n\n".'[CSV FILE]:'.
             "\n".'Filename: '.$file_uploaded["name"].
             "\n".'Temp Name: '.$file_uploaded["tmp_name"].
             "\n".'Type: '.$file_uploaded["type"].
             "\n".'Size: '.$file_uploaded["size"].' bytes.';
-        
+
         // Añade los datos del fichero csv:
         $log_data .= "\n\n".'[CSV DATA]:'."\n";
         $log_data .= implode(",", $file_data_array);
@@ -313,52 +336,98 @@ Class Addtogroupbydni extends Module {
     /**
      * Insertamos en la BBDD los clientes obtenidos mediante un archivo csv
      *
-     * @param [array[]] $array_dni
+     * @param [array[]] $array_registros_csv
      */
-    public function insertVipMembersOnDB($array_dni) {
-
-        // Obtenemos todos los dnis de la base de datos
-        $query = "SELECT dni FROM "._DB_PREFIX_.$this->name."_vip_miembros";
-        $dni_db = Db::getInstance()->executeS($query);
-
-        // Obtenemos la fecha actual
-        $date = new DateTime();
-        $date = $date->format("y_m_d_H_i_s");
-
-        // Iteramos los 2 arrays para comparar sus valores
-        foreach ( $dni_db as $indice => $variable ) {
-            foreach ( $array_dni as $index => $registro ) {
-
-                $variable['dni'] = str_replace('-', '', strtoupper(trim($variable['dni'])));
-                $registro = str_replace('-', '', strtoupper(trim($registro)));
-                // Comparamos para obtener 2 arrays y eliminar los valores que coinciden en ambos
-                if ( $variable['dni'] == $registro ) {
-                    unset($dni_db[$indice]);
-                    unset($array_dni[$index]);
-                }  
-            }
-        }
-
-        // Borramos los registros de la BBDD, para actualizarla con los miembros incluidos en el csv adjuntado
-        foreach ( $dni_db as $row ) {
-            $row['dni'] = htmlspecialchars(str_replace(';', ',', strtoupper(trim($row['dni']))));
-            $query = 'DELETE FROM '._DB_PREFIX_.$this->name.'_vip_miembros WHERE dni="' . pSQL($row['dni']) .'"';
-            Db::getInstance()->execute($query);
-        } 
-
+    public function insertVipMembersOnDB($array_registros_csv) {
         // Obtenemos el grupo seleccionado en el Backend
-        $selected_group = ((int)Configuration::get('SOY_'.strtoupper($this->name).'_SELECTED_GROUP'));
-
+        //$selected_group = ((int)Configuration::get('SOY_'.strtoupper($this->name).'_SELECTED_GROUP'));
+        $selected_group = (int)(Tools::getValue('groups_name'));
         if (empty($selected_group) || !$selected_group)
             return $this->displayError($this->trans('Debes seleccionar un grupo'));
 
+        // Obtenemos los registros cel CSV:
+        $dnisYemails_csv = $this->getDniYEmailArrayMultiple($array_registros_csv);
+        
+        // Obtenemos todos los dnis y emails de la base de datos:
+        $query = "SELECT dni, tipo FROM "._DB_PREFIX_.$this->name."_vip_miembros";
+        $dni_db = Db::getInstance()->executeS($query);
+
+
+        
+        // NOTA IMPORTANTE: SI QUEREMOS PERMITIR QUE UN CLIENTE PUEDA PERTENECER A VARIOS GRUPOS DE CLIENTES,
+        // BASTARÍA CON COMENTAR ESTE BLOQUE HASTA: //FIN NOTA IMPORTANTE.
+        // /*
+        // Array que contendrá los dnis y emails coincidentes en la BBDD y en el CSV, para eliminar de la BBDD:
+        $db_delete = Array();
+        // Iteramos los 2 arrays CSV y DB para comparar sus valores y encontrar los registros coincidentes.
+        foreach ( $dni_db as $indice => $variable ) {
+            $array_csv = Array();
+            // Comprueba el tipo del campo en la BBDD (1=>DNI, 2=>EMAIL)
+            // Y seleccionar el array a iterar:
+            switch ($variable['tipo']) {
+                case 1:     // DNI
+                    $array_csv = $dnisYemails_csv["dni"];
+                    $variable['dni'] = str_replace('-', '', strtoupper(trim($variable['dni'])));
+                    break;
+                case 2:     // EMAIL
+                    $variable['dni'] = strtoupper(trim($variable['dni']));
+                    $array_csv = $dnisYemails_csv["email"];
+                    break;
+            }
+            // Recorre todos los campos del CSV:
+            foreach ($array_csv as $index => $registro ) {
+                // Comprueba el tipo del campo en la BBDD (1=>DNI, 2=>EMAIL)
+                switch ($variable['tipo']) {
+                    case 1:     // DNI
+                        $registro = str_replace('-', '', strtoupper(trim($registro)));
+                        break;
+                    case 2:     // EMAIL
+                        $registro = strtoupper(trim($registro));
+                        break;
+                }
+                // Si los registros coinciden, lo guardamos en el array para borrar de la BBDD:
+                if ($variable['dni'] == $registro ) {
+                    array_push($db_delete, $registro);
+                }  
+            }
+        }
+        // Borramos los registros de la BBDD, del Grupo de Clientes que sea y que estén tanto en la BBDD como en el CSV: 
+        foreach ( $db_delete as $row ) {
+            $row = htmlspecialchars(str_replace(';', ',', strtoupper(trim($row))));
+            $query = 'DELETE FROM '._DB_PREFIX_.$this->name.'_vip_miembros WHERE dni="' . pSQL($row) .'"';
+            Db::getInstance()->execute($query);
+        }
+        // */
+        // FIN NOTA IMPORTANTE.
+
+
+
+        // Borramos TODOS los registros de la BBDD del Grupo de Clientes Seleccionado, después los insertaremos:
+        $query = 'DELETE FROM '._DB_PREFIX_.$this->name.'_vip_miembros WHERE grupo="' . $selected_group .'"';
+        Db::getInstance()->execute($query);
+       
         // Insertamos los registros de la BBDD, para actualizarla con los miembros incluidos en el csv adjuntado
-        foreach ( $array_dni as $dni ) {
-            $dni = htmlspecialchars(str_replace(';', ',', strtoupper(trim($dni))));
-            Db::getInstance()->insert($this->name.'_vip_miembros', array(
-                'dni' => pSQL($dni),
-                'equipo' => (int)$selected_group,
-            ));
+        foreach ($dnisYemails_csv as $clave => $array_datos ) {
+            foreach($array_datos as $dato) {
+                $tipo = 0; // Si se guarda 0 finalmente en la BBDD sería un error
+                switch ($clave) {
+                    case "dni":     // DNI
+                        $dato = htmlspecialchars(str_replace(';', ',', strtoupper(trim($dato))));
+                        $tipo = 1;
+                        break;
+                    case "email":   // EMAIL
+                        $dato = htmlspecialchars(str_replace(';', ',', trim($dato)));
+                        $tipo = 2;
+                        break;
+                }
+
+                Db::getInstance()->insert($this->name.'_vip_miembros', array(
+                    'dni' => pSQL($dato),
+                    'grupo' => (int)$selected_group,
+                    'tipo' => (int)$tipo 
+                ));
+            }
+            
         }
     }
       
@@ -383,15 +452,13 @@ Class Addtogroupbydni extends Module {
         return true;
     }
 
-    /**
-     * Obtenemos un array a partir del fichero csv leido mediante el BO
+     /**
+     * Obtenemos un array con los dnis y los emails del csv validados
      *
-     * @param [string] $file
-     * @param [string] $delimiter
+     * @param [aray()] $array_csv
      */
-    public function getDniArrayFromCsv($file,$delimiter) {
-
-        $dnis = array();
+    public function csvToArrayValidated($file, $delimiter) {
+        $dnisYemails = array();
 
         //  Obtenemos un array con los campos del fichero csv
         if (($handle = fopen($file, "r")) !== FALSE) {
@@ -406,17 +473,53 @@ Class Addtogroupbydni extends Module {
         }else   
             return false;
 
-        // Iteramos el array obtenido y creamos otro solo con los campos que sean dni's
+        // Iteramos el array obtenido, comprobando que sean dnis o emails:
         foreach ($dataArray as $csv) {
             foreach ($csv as $registro) {  
-                $registro = strtoupper(str_replace('-', '', $registro)); 
+                // Si es un DNI válido:
                 if ($this->validateDni(trim($registro))) {
-                    array_push($dnis, $registro);
+                    $registro = strtoupper(str_replace('-', '', $registro));    // Elimina el guión de la letra, en el caso de que sea un DNI
+                    array_push($dnisYemails, trim($registro));
+                }
+                // Si es un Email válido:
+                else if ($this->validateEmail(trim($registro))) {
+                    array_push($dnisYemails, trim($registro));                  // Si es un correo lo guarda tal cual
                 }
             }
         }
+
+        return array_unique($dnisYemails);
+    }
+
+    /**
+     * Obtenemos un array multiple separando los dnis y los emails
+     *
+     * @param [aray()] $array_csv
+     */
+    public function getDniYEmailArrayMultiple($array_csv) {
+        $dnis = array();
+        $emails = array();
+        $keys = array(
+            "dni" => array(),
+            "email" => array()
+        );
+
+        // Iteramos el array  y separamos los campos que son dnis y emails:
+        foreach ($array_csv as $registro) {  
+            if ($this->validateDni(trim($registro))) {
+                //$registro = strtoupper(str_replace('-', '', $registro)); 
+                array_push($dnis, trim($registro));
+            }
+            else if ($this->validateEmail(trim($registro))) {
+                array_push($emails, trim($registro));
+            }
+        }
+
+        // Hacer únicos:
+        $keys["dni"] = array_unique($dnis);
+        $keys["email"] = array_unique($emails);
         
-        return array_unique($dnis);
+        return $keys;
     }
 
     // Función que valida un DNI español
@@ -436,6 +539,57 @@ Class Addtogroupbydni extends Module {
         return $valido;
     }
 
+    // Función que valida un correo electrónico
+    public function validateEmail($email){
+        $valido=false;
+
+        if (filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $valido=true;
+        } else {
+            $valido=false;
+        }
+
+        return $valido;
+    }
+
+    public function hookActionCustomerAccountAdd($params) {
+        // Cogemos todos los emails vip de la base de datos 
+        $query = "SELECT dni, grupo FROM "._DB_PREFIX_.$this->name."_vip_miembros WHERE tipo=2";
+        $emails_vip_db = Db::getInstance()->executeS($query);
+
+        // Obtenemos el email del cliente tras registrar/actualizar su cuenta:
+        $query = "SELECT email FROM "._DB_PREFIX_."customer WHERE id_customer=".$this->context->customer->id;
+        $customer_email = Db::getInstance()->getValue($query);
+
+        // Obtenemos el grupo seleccionado en el Backend
+        //$selected_group = ((int)Configuration::get('SOY_'.strtoupper($this->name).'_SELECTED_GROUP'));
+        foreach ( $emails_vip_db as $row ) {
+            if ( $customer_email == $row['dni']) {
+                $this->insertCustomerByGroup($row['grupo']);
+            }         
+        }
+
+    }
+
+    public function hookActionCustomerAccountUpdate($params) {
+        // Cogemos todos los emails vip de la base de datos 
+        $query = "SELECT dni, grupo FROM "._DB_PREFIX_.$this->name."_vip_miembros WHERE tipo=2";
+        $emails_vip_db = Db::getInstance()->executeS($query);
+
+        // Obtenemos el email del cliente tras registrar/actualizar su cuenta:
+        $query = "SELECT email FROM "._DB_PREFIX_."customer WHERE id_customer=".$this->context->customer->id;
+        $customer_email = Db::getInstance()->getValue($query);
+
+        // Obtenemos el grupo seleccionado en el Backend
+        //$selected_group = ((int)Configuration::get('SOY_'.strtoupper($this->name).'_SELECTED_GROUP'));
+        foreach ( $emails_vip_db as $row ) {
+            if ( $customer_email == $row['dni']) {
+                $this->insertCustomerByGroup($row['grupo']);
+            }         
+        }
+    }
+
+
     /**
      * Tratramiento del hook -> ActionValidateCustomerAddressForm
      *
@@ -445,20 +599,20 @@ Class Addtogroupbydni extends Module {
     public function hookActionValidateCustomerAddressForm($params){
 
         // Cogemos todos los dnis vip de la base de datos 
-        $query = "SELECT dni FROM "._DB_PREFIX_.$this->name."_vip_miembros";
-        $dni_db = Db::getInstance()->executeS($query);
+        $query = "SELECT dni, grupo FROM "._DB_PREFIX_.$this->name."_vip_miembros WHERE tipo=1";
+        $dnis_vip_db = Db::getInstance()->executeS($query);
         
         // Cogemos el dni del formulario tras validarlo por el hook
         $form = $params['form'];
         $dni_form = trim(strtoupper(str_replace('-', '', $form->getField('dni')->getValue())));
 
         // Obtenemos el grupo seleccionado en el Backend
-        $selected_group = ((int)Configuration::get('SOY_'.strtoupper($this->name).'_SELECTED_GROUP'));
+        //$selected_group = ((int)Configuration::get('SOY_'.strtoupper($this->name).'_SELECTED_GROUP'));
         
-        foreach ( $dni_db as $row ) {
-            foreach ( $row as $item ) { 
-                if ( $dni_form == $item)
-                    $this->insertCustomerByGroup($selected_group);
+        foreach ( $dnis_vip_db as $row ) {
+            if ( $dni_form == $row['dni']) {
+                //$this->insertCustomerByGroup($selected_group);
+                $this->insertCustomerByGroup($row['grupo']);
             }        
         }
     }
@@ -471,7 +625,8 @@ Class Addtogroupbydni extends Module {
     public function hookActionObjectDeleteBefore($params){
 
         // Obtenemos el grupo seleccionado en el Backend
-        $selected_group = ((int)Configuration::get('SOY_'.strtoupper($this->name).'_SELECTED_GROUP'));
+        //$selected_group = ((int)Configuration::get('SOY_'.strtoupper($this->name).'_SELECTED_GROUP'));
+        $selected_group = (int)(Tools::getValue('groups_name'));
 
         // Obtenemos el id del consumidor logueado
         $id_customer = (int)$this->context->customer->id;
