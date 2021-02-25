@@ -26,7 +26,7 @@ Class Addtogroupbydni extends Module {
         if (!parent::install()
                 OR !$this->installDb()
                 OR !$this->registerHook('actionCustomerAccountAdd')
-                OR !$this->registerHook('actionCustomerAccountUpdate')
+                //OR !$this->registerHook('actionCustomerAccountUpdate')
                 OR !$this->registerHook('actionValidateCustomerAddressForm')
                 OR !$this->registerHook('actionObjectDeleteBefore')
             )
@@ -55,7 +55,7 @@ Class Addtogroupbydni extends Module {
 
         if (!parent::uninstall() 
                 OR !$this->unregisterHook('actionCustomerAccountAdd')
-                OR !$this->unregisterHook('actionCustomerAccountUpdate')
+                //OR !$this->unregisterHook('actionCustomerAccountUpdate')
                 OR !$this->unregisterHook('actionValidateCustomerAddressForm')
                 OR !$this->unregisterHook('actionObjectDeleteBefore')
             )
@@ -72,26 +72,33 @@ Class Addtogroupbydni extends Module {
         // Aquí introduciremos nuestro código para darle funcionalidad al botón "Exportar Clientes en CSV" 
         if ( Tools::isSubmit('export_to_csv') ) {
 
-            // Obtenemos el grupo seleccionado en el Backend
-            $selected_group = (int)(Tools::getValue('groups_name'));
+            // EXPORTAR FICHERO CSV:
+
+            // Obtenemos el grupo seleccionado en el BO y el guardado en la configuración 
+             $id_selected_group = (int)(Tools::getValue('groups_name_export'));
+             $id_old_group = (int)Configuration::get('SOY_'.strtoupper($this->name).'_SELECTED_GROUP_EXPORT');
+             // Comparamos el grupo guardado en la cofiguración con el seleccionado en el BO, si son distintos guardamos el nuevo en la configuración
+             if ($id_selected_group != $id_old_group) {
+                 (int)Configuration::updateValue('SOY_'.strtoupper($this->name).'_SELECTED_GROUP_EXPORT', $id_selected_group);
+             }
 
             // Obtiene el id cliente, el id grupo, el nombre traducido del grupo, el correo, el nombre y el apellido del grupo de cliente seleccionado:
             /*
-                SELECT c.id_customer, cg.id_group, gl.name, email, firstname, lastname
+                SELECT c.id_customer, email, firstname, lastname, c.id_default_group, cg.id_group, gl.name
                 FROM ps_customer AS c
                 INNER JOIN ps_customer_group AS cg ON c.id_customer = cg.id_customer
                 INNER JOIN ps_group_lang AS gl ON cg.id_group = gl.id_group
                 WHERE cg.id_group = 3 AND gl.id_lang = 1
             */
-            $query = "SELECT c.id_customer, cg.id_group, gl.name, email, firstname, lastname ".
+            $query = "SELECT c.id_customer, email, firstname, lastname, c.id_default_group, cg.id_group, gl.name ".
             "FROM "._DB_PREFIX_."customer AS c ".
             "INNER JOIN "._DB_PREFIX_."customer_group AS cg ON c.id_customer = cg.id_customer ".
             "INNER JOIN "._DB_PREFIX_."group_lang AS gl ON cg.id_group = gl.id_group ".
-            "WHERE cg.id_group = ". $selected_group ." AND gl.id_lang = ". $this->context->language->id;
+            "WHERE cg.id_group = ". $id_selected_group ." AND gl.id_lang = ". $this->context->language->id;
             $customers_db = Db::getInstance()->executeS($query);
 
             // Obtiene el nombre del grupo de clientes seleccionado:
-            $query = "SELECT name FROM "._DB_PREFIX_."group_lang WHERE id_group = ".$selected_group. " AND id_lang = ". $this->context->language->id;
+            $query = "SELECT name FROM "._DB_PREFIX_."group_lang WHERE id_group = ".$id_selected_group. " AND id_lang = ". $this->context->language->id;
             // Crea el nombre del fichero a partir del nombre del grupo seleccionado, en minúsculas y reemplaza espacios (" ") por guiones ("_"):
             $file_name = str_replace(' ', '_', strtolower(Db::getInstance()->getValue($query)));
 
@@ -105,7 +112,7 @@ Class Addtogroupbydni extends Module {
                 fputs($file, $bom = chr(0xEF) . chr(0xBB) . chr(0xBF) );
                 // Escribe cada fila en el fichero csv, separado por coma ",":
                 foreach ($customers_db as $customer) {
-                    fputcsv($file, $customer, ',');
+                    fputcsv($file, $customer, ',', "'");
                 }
                 // Cierra el fichero
                 fclose($file);
@@ -132,48 +139,67 @@ Class Addtogroupbydni extends Module {
 
         }
 
-        // Submit del grupo VIP seleccionado
-        if ( Tools::isSubmit('group_form') ) {
+        // Submit de la importaciín del csv
+        if ( Tools::isSubmit('csv_form') ) {
 
             // Obtenemos el grupo seleccionado en el BO y el guardado en la configuración 
             $id_selected_group = (int)(Tools::getValue('groups_name'));
             $id_old_group = (int)Configuration::get('SOY_'.strtoupper($this->name).'_SELECTED_GROUP');
-
             // Comparamos el grupo guardado en la cofiguración con el seleccionado en el BO, si son distintos guardamos el nuevo en la configuración
             if ($id_selected_group != $id_old_group) {
                 (int)Configuration::updateValue('SOY_'.strtoupper($this->name).'_SELECTED_GROUP', $id_selected_group);
-                $this->_html .= $this->displayConfirmation( $this->trans('VIP Group changed successfully '));
             }
 
-            return $this->_html . $this->renderForm() . $this->display(__FILE__, 'views/templates/admin/addtogroupbydni.tpl');
-        }
+            // Comprueba si se ha marcado el check para eliminar los datos del grupo
+           
+            if ((bool)(Tools::getValue('check_group_delete_0'))) {
 
-        // Submit de la importaciín del csv
-        if ( Tools::isSubmit('csv_form') ) {
+                // ELIMINAR LOS DATOS DEL GRUPO SELECCIONADO:
 
-            // Tratamos el fichero csv adjuntado en el BO
-            $files = $_FILES;
-            foreach ($files as $item => $value)
-                $file = $value;
+                // Obtiene el nombre del grupo de clientes seleccionado
+                $query = "SELECT name FROM "._DB_PREFIX_."group_lang WHERE id_group = ".$id_selected_group." AND id_lang = ". $this->context->language->id;
+                $group_name = Db::getInstance()->getValue($query);
 
-            if ($file['error'] === UPLOAD_ERR_OK){
-                // Obtenemos un array con los dni y los emails validados
-                $registros_csv = $this->csvToArrayValidated($file['tmp_name'], ','); 
-                if ( $registros_csv == FALSE ){
-                    $this->_html .= $this->displayError($this->trans('Los registros del CSV insertado no son correctos. Recuerda utilizar la "," como delimitador.'));
+                // Borramos TODOS los registros de la BBDD del Grupo de Clientes Seleccionado, después los insertaremos:
+                $query = 'DELETE FROM '._DB_PREFIX_.$this->name.'_vip_miembros WHERE grupo="' . $id_selected_group .'"';
+                if ($result = Db::getInstance()->execute($query)) {   // Ejecuta el borrado
+                    // Si ha tenido éxito:
+                    $this->_html .= $this->displayConfirmation($this->trans('Se han eliminado correctamente los datos del grupo '.$group_name));
+                } else {
+                    $this->_html .= $this->displayError($this->trans('Ha ocurrido un error al intentar borrar los datos del grupo '.$group_name));
                     return $this->_html . $this->renderForm();
                 }
-                // Crea un archivo log con la información del fichero csv subido correctamente y validado
-                $this->createCSVUploadedLog($file, $registros_csv);
-                // Inserta el cliente en la base de datos
-                $this->insertVipMembersOnDB($registros_csv);
-                $this->_html .= $this->displayConfirmation($this->trans('CSV file uploaded successfully.'));
-            } 
-            else {
-                $this->_html .= $this->displayError($this->trans('Empty CSV file.'));
-            }
+                return $this->_html . $this->renderForm() . $this->display(__FILE__, 'views/templates/admin/addtogroupbydni.tpl');
+            
+            } else {
 
-            return $this->_html . $this->renderForm() . $this->display(__FILE__, 'views/templates/admin/addtogroupbydni.tpl');
+                // IMPORTAR FICHERO CSV:
+
+                // Tratamos el fichero csv adjuntado en el BO
+                $files = $_FILES;
+                foreach ($files as $item => $value)
+                    $file = $value;
+
+                if ($file['error'] === UPLOAD_ERR_OK){
+                    // Obtenemos un array con los dni y los emails validados
+                    $registros_csv = $this->csvToArrayValidated($file['tmp_name'], ','); 
+                    if ( $registros_csv == FALSE ){
+                        $this->_html .= $this->displayError($this->trans('Los registros del CSV insertado no son correctos. Recuerda utilizar la "," como delimitador.'));
+                        return $this->_html . $this->renderForm();
+                    }
+                    // Crea un archivo log con la información del fichero csv subido correctamente y validado
+                    $this->createCSVUploadedLog($file, $registros_csv);
+                    // Inserta el cliente en la base de datos
+                    $this->insertVipMembersOnDB($registros_csv);
+                    $this->_html .= $this->displayConfirmation($this->trans('El fichero CSV se ha cargado correctamente.'));
+                } 
+                else {
+                    $this->_html .= $this->displayError($this->trans('Fichero CSV vacío.'));
+                }
+
+                return $this->_html . $this->renderForm() . $this->display(__FILE__, 'views/templates/admin/addtogroupbydni.tpl');
+            }
+            
         }
 
         return $this->renderForm() . $this->display(__FILE__, 'views/templates/admin/addtogroupbydni.tpl');
@@ -191,6 +217,7 @@ Class Addtogroupbydni extends Module {
         $id_lang = $this->context->language->id;
         $query = "SELECT * FROM "._DB_PREFIX_."group_lang WHERE id_lang=". (int)$id_lang;
         $get_groups = Db::getInstance()->executeS($query); 
+        $get_groups_export = Db::getInstance()->executeS($query);
 
         $helper = new HelperForm();
         $helper->module = $this;
@@ -205,57 +232,86 @@ Class Addtogroupbydni extends Module {
         $helper->submit_action = $this->name;
 
         $selected_group = ((int)Configuration::get('SOY_'.strtoupper($this->name).'_SELECTED_GROUP'));
+        $selected_group_export = ((int)Configuration::get('SOY_'.strtoupper($this->name).'_SELECTED_GROUP_EXPORT'));
 
-        // Asignamos al select el valor del grupo seleccionado como VIP
-        $helper->fields_value['groups_name'] = $selected_group;  
+        // Asignamos al select el valor del grupo seleccionado para Exportar
+        $helper->fields_value['groups_name_export'] = $selected_group_export;
+        // Asignamos al select el valor del grupo seleccionado para Importar
+        $helper->fields_value['groups_name'] = $selected_group; 
+       
     
-        // Formulario donde seleccionamos nuestro grupo VIP
+        // Formulario que nos permite importar el csv con los clientes VIP
         $this->form[0] = array(
             'form' => array(
                 'legend' => array(
-                    'title' => $this->trans('CHOOSING VIP GROUP')
-                    ),
+                    'title' => $this->trans('CSV IMPORT')
+                ),
                 'input' => array(
                     array( 
                         'type' => 'select',
-                        'label' => $this->trans('Select your VIP Group'),
+                        'label' => $this->trans('Grupo de Clientes'),
                         'name' => 'groups_name',
                         'options' => array(
                             'query' => $get_groups,
                             'name' => 'name',
                             'id' => 'id_group'
                         ),
-                    ),      
-                ),
-                
-                'submit' => array(
-                    'title' => $this->trans('Save'),
-                    'name' => 'group_form'
-                    )
-                )
-            );
-
-        // Formulario que nos permite importar el csv con los clientes VIP
-        $this->form[1] = array(
-            'form' => array(
-                'legend' => array(
-                    'title' => $this->trans('CSV IMPORT')
                     ),
-                'input' => array(
+                    array(
+                        'type' => 'checkbox',
+                        'label' => $this->trans('Eliminar'),
+                        'desc' => "",
+                        'name' => 'check_group_delete',
+                        'values' => array(
+                            'query' => $eliminar = array(
+                                array(
+                                    'check_id' => '0',
+                                    'name' => $this->trans('Borrar los datos del grupo de clientes seleccionado.'),
+                                )
+                            ),
+                            'id' => 'check_id',
+                            'name' => 'name',
+                            'desc' => $this->trans('Seleccione para eliminar los datos dele grupo de clientes.')
+                        )
+                    ),
                     array(
                         'type' => 'file',
                         'label' => $this->trans('CSV file'),
                         'name' => 'CSVIMPORT_CSV_FILE',
-                        'desc' => $this->trans('Select file you wish to import.')
-                    ),         
+                        'desc' => $this->trans('Seleccione el archivo CSV que desea importar.')
+                    )
+                      
                 ),
-                
                 'submit' => array(
-                    'title' => $this->trans('Save'),
+                    'title' => $this->trans('Importar CSV'),
                     'name' => 'csv_form'
                     )
+            )
+        );
+
+        $this->form[1] = array(
+            'form' => array(
+                'legend' => array(
+                    'title' => $this->trans('CSV EXPORT')
+                ),
+                'input' => array(
+                    array( 
+                        'type' => 'select',
+                        'label' => $this->trans('Grupo de Clientes'),
+                        'name' => 'groups_name_export',
+                        'options' => array(
+                            'query' => $get_groups_export,
+                            'name' => 'name',
+                            'id' => 'id_group'
+                        )
+                    )     
+                ),
+                'submit' => array(
+                    'title' => $this->trans('Exportar CSV'),
+                    'name' => 'export_to_csv'
                 )
-            );
+            )
+        );
         
         return $helper->generateForm($this->form);
 
@@ -267,17 +323,9 @@ Class Addtogroupbydni extends Module {
      * @param [int] $group
      */
     public function insertCustomerByGroup($group) {
-
         $id_customer = (int)$this->context->customer->id;
-        dump($id_customer);
-
         $query = "SELECT id_group FROM "._DB_PREFIX_."customer_group WHERE id_group=". (int)$group ." AND id_customer=". (int)$id_customer;
         $results = Db::getInstance()->getValue($query);
-        
-        dump("Results:");
-        dump($results);
-        dump("Group:");
-        dump($group);
         
         // Insertamos el cliente en la BBDD
         if ( $group != $results ) {
@@ -301,7 +349,7 @@ Class Addtogroupbydni extends Module {
         // Obtiene el nombre del grupo de clientes seleccionado:
         $group_id = (int)(Tools::getValue('groups_name'));
         $query = "SELECT name FROM "._DB_PREFIX_."group_lang WHERE id_group = ".$group_id." AND id_lang = ". $this->context->language->id;
-        $gruop_name = Db::getInstance()->getValue($query);
+        $group_name = Db::getInstance()->getValue($query);
         
         // Cadena con información del Admin: fecha, ip, email y nombre
         $log_data = $date->format('d/m/Y H:i:s').
@@ -313,7 +361,7 @@ Class Addtogroupbydni extends Module {
         // Añade el Grupo de Clientes del csv subido
         $log_data .= "\n\n".'[CUSTOMER GROUP]:'.
             "\n".'ID Group: '.$group_id.
-            "\n".'Group: '.$gruop_name;
+            "\n".'Group: '.$group_name;
 
         // Añade información del fichero csv: nombre, nombre temporal, tipo y tamaño (bytes)
         $log_data .= "\n\n".'[CSV FILE]:'.
@@ -438,7 +486,6 @@ Class Addtogroupbydni extends Module {
      * @return bool
      */
     public function noDuplicado(array $customer_dnis, string $address_dni, string $name) {
-
         $count = count($customer_dnis); 
         foreach ( $customer_dnis as $indice => $row){
             for ($i = $indice + 1; $i < $count; $i++) {
@@ -571,7 +618,7 @@ Class Addtogroupbydni extends Module {
 
     }
 
-    public function hookActionCustomerAccountUpdate($params) {
+    /*public function hookActionCustomerAccountUpdate($params) {
         // Cogemos todos los emails vip de la base de datos 
         $query = "SELECT dni, grupo FROM "._DB_PREFIX_.$this->name."_vip_miembros WHERE tipo=2";
         $emails_vip_db = Db::getInstance()->executeS($query);
@@ -587,7 +634,7 @@ Class Addtogroupbydni extends Module {
                 $this->insertCustomerByGroup($row['grupo']);
             }         
         }
-    }
+    }*/
 
 
     /**
@@ -630,10 +677,11 @@ Class Addtogroupbydni extends Module {
 
         // Obtenemos el id del consumidor logueado
         $id_customer = (int)$this->context->customer->id;
+        $email_customer = $this->context->customer->email;
 
         // Cogemos todos los dnis vip de la base de datos 
-        $query = "SELECT dni FROM "._DB_PREFIX_.$this->name."_vip_miembros";
-        $dni_db = Db::getInstance()->executeS($query);
+        $query = "SELECT dni, grupo FROM "._DB_PREFIX_.$this->name."_vip_miembros WHERE tipo=1";
+        $dnis_vip_db = Db::getInstance()->executeS($query);
 
         // Obtenemos el id_address correspondiente a la dirección que va a borrar el cliente
         $id_address = (int)Tools::getValue('id_address');
@@ -642,34 +690,48 @@ Class Addtogroupbydni extends Module {
         $query = "SELECT id_address FROM "._DB_PREFIX_."address WHERE id_customer=" . $id_customer;
         $customer_addresses = Db::getInstance()->executeS($query);
 
-        // Recorremos las direcciones del cliente loguead
+        // Recorremos las direcciones del cliente logueado
         if ($id_customer > 0){
             $cont = 0;
             foreach($customer_addresses as $row){
-                if($row['id_address'] == $id_address){
+                if($row['id_address'] == $id_address){  // Si el la dirección que se va a borrar:
                     // Obtenemos el dni correspondiente a la dirección borrada por el cliente
                     $sql = 'SELECT dni FROM '._DB_PREFIX_.'address WHERE id_address=' . $id_address;
                     $dni_by_address = Db::getInstance()->getValue($sql);
-
+                 
+                    // Los dni de todas las direcciones del cliente
                     $query = 'SELECT dni FROM '._DB_PREFIX_.'address WHERE id_customer=' . $id_customer;
-                    $dni_by_customer = Db::getInstance()->executeS($query);
-
+                    $dnis_by_customer = Db::getInstance()->executeS($query);
+                   
+                    // Obtiene un array con los dni de todas las direcciones del cliente
                     $dnis_cliente = array();
-                    foreach ($dni_by_customer as $dni_cliente)
+                    foreach ($dnis_by_customer as $dni_cliente) {
                         array_push($dnis_cliente, $dni_cliente['dni']);
+                    }
                     
-                    array_unique($dnis_cliente);
+                    // Borra los dni duplicados, los que se repiten en otras direcciones
+                    $dnis_cliente = array_unique($dnis_cliente);
 
-                    foreach ($dni_db as $row_dni)
-                        if(in_array($row_dni['dni'], $dnis_cliente))
-                                $cont++;
+                    // Cuenta el número de dnis del cliente que hay en los vips:
+                    foreach ($dnis_vip_db as $row_dni)  {
+                        if(in_array($row_dni['dni'], $dnis_cliente)) {
+                            $cont++;
+                        }
+                    } 
 
                     // Borramos del grupo VIP al cliente que ha borrado la dirección con el dni VIP
-                    if ($this->noDuplicado($dni_by_customer, $dni_by_address, 'dni')) {
-                        foreach ($dni_db as $row_dni){
+                    // Sólo lo borra si es la única dirección del cliente que tiene un DNI VIP y en el grupo a borrar no tiene un email VIP.
+                    // Es decir, si el dni de la dirección a borrar es VIP y también está en otra dirección, no lo borrará del grupo.
+                    if ($this->noDuplicado($dnis_by_customer, $dni_by_address, 'dni')) {
+                        foreach ($dnis_vip_db as $row_dni){
                             if ($row_dni['dni'] == $dni_by_address ){
-                                if($cont == 1){
-                                    $query = 'DELETE FROM '._DB_PREFIX_.'customer_group WHERE id_group='. $selected_group .' AND id_customer='. $id_customer;
+                                // Comprueba si el cliente es VIP porque tiene un email VIP, en ese caso, no lo borrará dee grupo
+                                $query = "SELECT count(*) FROM "._DB_PREFIX_.$this->name."_vip_miembros WHERE tipo=2 AND dni='".$email_customer."' AND grupo=".$row_dni['grupo'];
+                                $cont_emails = (int)(Db::getInstance()->getValue($query));
+                                // Si es la única dirección que tiene el DNI VIP:
+                                if($cont == 1 && $cont_emails == 0){     
+                                    // Borra del grupo al cliente:
+                                    $query = 'DELETE FROM '._DB_PREFIX_.'customer_group WHERE id_group='. $row_dni['grupo'] .' AND id_customer='. $id_customer;
                                     Db::getInstance()->execute($query);
                                 }             
                             }
